@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, date, timedelta
 import numpy as np
+import os
 
 # Page configuration
 st.set_page_config(
@@ -70,30 +69,46 @@ def load_data():
         # Ensure proper data types
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
         df = df.dropna(subset=['Amount'])
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
         return df
     except FileNotFoundError:
         return pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount', 'Description', 'Tags'])
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame(columns=['Date', 'Type', 'Category', 'Amount', 'Description', 'Tags'])
 
 def save_data(df):
-    """Save data with backup"""
-    df.to_csv(DATA_FILE, index=False)
+    """Save data with backup and error handling"""
+    try:
+        # Save a backup
+        if os.path.exists(DATA_FILE):
+            df.to_csv(DATA_FILE + ".bak", index=False)
+        df.to_csv(DATA_FILE, index=False)
+    except Exception as e:
+        st.error(f"Error saving data: {e}")
 
-def add_transaction(date, ttype, category, amount, description, tags=""):
+def add_transaction(date_input, ttype, category, amount, description, tags=""):
     """Add transaction with validation"""
+    # Prevent future-dated transactions
+    if isinstance(date_input, date) and date_input > date.today():
+        st.warning("Cannot add a future-dated transaction.")
+        return False
+
     df = load_data()
-    
+
     # Convert amount based on type
     final_amount = amount if ttype == "Income" else -amount
-    
+
     new_entry = {
-        "Date": pd.to_datetime(date),
+        "Date": pd.to_datetime(date_input),
         "Type": ttype,
         "Category": category,
         "Amount": final_amount,
         "Description": description,
         "Tags": tags
     }
-    
+
     df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
     save_data(df)
     return True
@@ -270,29 +285,51 @@ else:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            income_delta = total_income - prev_income if prev_income > 0 else None
-            st.metric(
-                "💰 Total Income",
-                f"${total_income:,.2f}",
-                delta=f"${income_delta:,.2f}" if income_delta is not None else None
-            )
+            if prev_income != 0:
+                income_delta = total_income - prev_income
+                st.metric(
+                    "💰 Total Income",
+                    f"${total_income:,.2f}",
+                    delta=f"${income_delta:,.2f}"
+                )
+            else:
+                st.metric(
+                    "💰 Total Income",
+                    f"${total_income:,.2f}",
+                    delta="N/A"
+                )
         
         with col2:
-            expense_delta = total_expenses - prev_expenses if prev_expenses > 0 else None
-            st.metric(
-                "💸 Total Expenses",
-                f"${total_expenses:,.2f}",
-                delta=f"${expense_delta:,.2f}" if expense_delta is not None else None,
-                delta_color="inverse"
-            )
+            if prev_expenses != 0:
+                expense_delta = total_expenses - prev_expenses
+                st.metric(
+                    "💸 Total Expenses",
+                    f"${total_expenses:,.2f}",
+                    delta=f"${expense_delta:,.2f}",
+                    delta_color="inverse"
+                )
+            else:
+                st.metric(
+                    "💸 Total Expenses",
+                    f"${total_expenses:,.2f}",
+                    delta="N/A",
+                    delta_color="inverse"
+                )
         
         with col3:
-            balance_delta = net_balance - prev_balance if prev_balance != 0 else None
-            st.metric(
-                "💵 Net Balance",
-                f"${net_balance:,.2f}",
-                delta=f"${balance_delta:,.2f}" if balance_delta is not None else None
-            )
+            if prev_balance != 0:
+                balance_delta = net_balance - prev_balance
+                st.metric(
+                    "💵 Net Balance",
+                    f"${net_balance:,.2f}",
+                    delta=f"${balance_delta:,.2f}"
+                )
+            else:
+                st.metric(
+                    "💵 Net Balance",
+                    f"${net_balance:,.2f}",
+                    delta="N/A"
+                )
         
         with col4:
             if total_income > 0:
@@ -469,13 +506,18 @@ else:
         if not display_df.empty:
             # Format the dataframe for display
             display_df_formatted = display_df.copy()
-            display_df_formatted['Amount'] = display_df_formatted['Amount'].apply(lambda x: f"${x:,.2f}")
+            # Show negative sign for expenses for clarity
+            display_df_formatted['Amount'] = display_df_formatted['Amount'].apply(
+                lambda x: f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
+            )
             display_df_formatted['Date'] = display_df_formatted['Date'].dt.strftime('%Y-%m-%d')
             
             # Reorder columns
             column_order = ['Date', 'Type', 'Category', 'Amount', 'Description']
-            if 'Tags' in display_df_formatted.columns:
+            if 'Tags' in display_df_formatted.columns and 'Tags' not in column_order:
                 column_order.append('Tags')
+            # Only include columns that exist in the current DataFrame
+            column_order = [col for col in column_order if col in display_df_formatted.columns]
             
             st.dataframe(
                 display_df_formatted[column_order].sort_values('Date', ascending=False),
